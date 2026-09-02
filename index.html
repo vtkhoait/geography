@@ -787,20 +787,59 @@ viewport.addEventListener('wheel', (e) => {
   zoomTo(zoomState.scale * factor, anchorX, anchorY, false);
 }, { passive:false });
 
-// Drag-to-pan, with a real (not click-jitter) movement threshold before it engages.
-// A plain click — even one with a few px of natural mouse/trackpad jitter — must
-// always still reach the country underneath it.
+// Drag-to-pan (one finger / mouse), with a real (not click-jitter) movement
+// threshold before it engages — a plain click, even with a few px of natural
+// mouse/trackpad jitter, must always still reach the country underneath it.
+// Pinch-to-zoom (two fingers) is layered on the same pointer stream: a
+// second finger touching down cancels any one-finger pan and switches to
+// pinch mode until fingers drop back below two.
 const DRAG_ENGAGE_PX = 8;
 let candidate = false, dragging = false, didPan = false;
 let dragStart = {x:0,y:0}, panStart = {x:0,y:0}, activePointerId = null;
 
+const activeTouches = new Map(); // pointerId -> {x,y}, fingers currently down on the map
+let pinching = false, pinchStartDist = 1, pinchStartScale = 1;
+
+function touchPoint(e){ return { x:e.clientX, y:e.clientY }; }
+function touchDistance(a, b){ return Math.hypot(a.x - b.x, a.y - b.y); }
+function touchMidpoint(a, b){ return { x:(a.x + b.x) / 2, y:(a.y + b.y) / 2 }; }
+
+function startPinch(){
+  candidate = false; dragging = false;
+  viewport.classList.remove('dragging');
+  const pts = Array.from(activeTouches.values());
+  pinching = true;
+  pinchStartDist = Math.max(1, touchDistance(pts[0], pts[1]));
+  pinchStartScale = zoomState.scale;
+  stage.classList.remove('animated');
+}
+
 viewport.addEventListener('pointerdown', (e) => {
+  if(e.pointerType === 'touch') activeTouches.set(e.pointerId, touchPoint(e));
+
+  if(activeTouches.size >= 2){
+    startPinch();
+    return;
+  }
   candidate = true; dragging = false; didPan = false;
   dragStart = { x:e.clientX, y:e.clientY };
   panStart = { x:zoomState.tx, y:zoomState.ty };
   activePointerId = e.pointerId;
 });
 viewport.addEventListener('pointermove', (e) => {
+  if(e.pointerType === 'touch' && activeTouches.has(e.pointerId)) activeTouches.set(e.pointerId, touchPoint(e));
+
+  if(pinching){
+    if(activeTouches.size < 2) return;
+    const pts = Array.from(activeTouches.values());
+    const dist = Math.max(1, touchDistance(pts[0], pts[1]));
+    const mid = touchMidpoint(pts[0], pts[1]);
+    const rect = viewport.getBoundingClientRect();
+    didPan = true;
+    zoomTo(pinchStartScale * (dist / pinchStartDist), mid.x - rect.left, mid.y - rect.top, false);
+    return;
+  }
+
   if(!candidate) return;
   const dx = e.clientX - dragStart.x, dy = e.clientY - dragStart.y;
   if(!dragging){
@@ -815,14 +854,18 @@ viewport.addEventListener('pointermove', (e) => {
   stage.classList.remove('animated');
   applyZoom();
 });
-function endDrag(){
-  candidate = false; dragging = false;
-  viewport.classList.remove('dragging');
+function endDrag(e){
+  if(e && e.pointerType === 'touch') activeTouches.delete(e.pointerId);
+  if(activeTouches.size < 2) pinching = false;
+  if(activeTouches.size === 0){
+    candidate = false; dragging = false;
+    viewport.classList.remove('dragging');
+  }
 }
 viewport.addEventListener('pointerup', endDrag);
 viewport.addEventListener('pointerleave', endDrag);
 viewport.addEventListener('pointercancel', endDrag);
-// Suppress the click-to-toggle only when this pointer sequence actually panned the map.
+// Suppress the click-to-toggle only when this pointer sequence actually panned/pinched the map.
 viewport.addEventListener('click', (e) => {
   if(didPan){ e.stopPropagation(); e.preventDefault(); didPan = false; }
 }, true);
