@@ -109,7 +109,17 @@
     align-items:start;
   }
   @media (max-width:900px){
-    .layout{ grid-template-columns:1fr; }
+    /* Phone layout: map is a fixed-height band up top, the whole menu
+       (progress, submit, gallery, index) flows below it. */
+    .page{ padding:14px 12px 32px; }
+    header.top{ margin-bottom:12px; gap:8px; }
+    header.top .title-block p{ display:none; }
+    header.top .coords{ display:none; }
+    .layout{ grid-template-columns:1fr; gap:16px; }
+    .map-panel{ padding:10px; }
+    .map-viewport{ height:52vh; min-height:320px; }
+    .map-stage{ height:100%; }
+    svg#map{ height:100%; width:100%; }
   }
 
   .map-panel{
@@ -439,7 +449,7 @@
       </div>
       <div class="map-viewport" id="mapViewport">
         <div class="map-stage" id="mapStage">
-          <svg id="map" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 860" role="img" aria-label="Bản đồ các nước châu Âu">
+          <svg id="map" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 860" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Bản đồ các nước châu Âu">
             <g class="graticule" id="graticule"></g>
             <g id="countryPaths"></g>
             <g id="pins"></g>
@@ -810,6 +820,7 @@ viewport.addEventListener('click', (e) => {
   if(didPan){ e.stopPropagation(); e.preventDefault(); didPan = false; }
 }, true);
 window.addEventListener('resize', () => applyZoom());
+window.addEventListener('orientationchange', () => setTimeout(applyZoom, 60));
 
 loadState();
 loadSnapshots();
