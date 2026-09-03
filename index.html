@@ -197,6 +197,32 @@
   .zoom-controls button:last-child{ border-bottom:none; }
   .zoom-controls button:hover{ background:var(--accent); color:var(--accent-ink); }
   .zoom-controls button:active{ transform:none; filter:brightness(0.95); }
+
+  .toast{
+    position:fixed;
+    left:50%;
+    bottom:22px;
+    transform:translateX(-50%) translateY(10px);
+    background:#132228;
+    color:#f3f6f5;
+    border:1px solid rgba(255,255,255,0.14);
+    padding:12px 20px;
+    border-radius:10px;
+    box-shadow:0 10px 30px -8px rgba(0,0,0,0.5);
+    font-family:"IBM Plex Sans", sans-serif;
+    font-size:13.5px;
+    line-height:1.45;
+    max-width:min(90vw, 420px);
+    text-align:center;
+    opacity:0;
+    pointer-events:none;
+    transition:opacity 220ms ease, transform 220ms ease;
+    z-index:60;
+  }
+  .toast.show{
+    opacity:1;
+    transform:translateX(-50%) translateY(0);
+  }
   .zoom-controls .zoom-reset{ font-size:10px; letter-spacing:0.04em; }
   .graticule line{ stroke:var(--graticule); stroke-width:1; }
   .country{
@@ -439,6 +465,8 @@
 </head>
 <body>
 
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
 <div class="page">
   <header class="top">
     <div class="title-block">
@@ -666,6 +694,18 @@ const downloadsCapPromise = (window.claude && window.claude.use)
   ? window.claude.use('downloads').catch(() => null)
   : Promise.resolve(null);
 
+let toastTimer = null;
+function showToast(message){
+  const el = document.getElementById('toast');
+  if(!el) return;
+  el.textContent = message;
+  el.classList.add('show');
+  if(toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { el.classList.remove('show'); }, 3000);
+}
+const TOAST_MOBILE = 'Đã lưu ảnh thành công — kiểm tra trong Thư viện ảnh (Photo Gallery) trên điện thoại của bạn.';
+const TOAST_DESKTOP = 'Đã lưu ảnh thành công — kiểm tra trong thư mục Downloads trên máy tính của bạn.';
+
 // Preferred path: the platform's own save capability. Inside the Claude app
 // it hands the file to the right native surface itself — the browser's
 // download flow on a computer, the iOS share sheet (→ "Save Image" into
@@ -680,6 +720,7 @@ async function saveOrShare(dataUrl, filename, blob){
     const downloadsCap = await downloadsCapPromise;
     if(downloadsCap){
       await downloadsCap.save({ filename, data: blob });
+      showToast(isMobileDevice() ? TOAST_MOBILE : TOAST_DESKTOP);
       return;
     }
   }catch(err){
@@ -691,11 +732,13 @@ async function saveOrShare(dataUrl, filename, blob){
       const file = new File([blob], filename, { type:'image/png' });
       if(navigator.canShare && navigator.canShare({ files:[file] })){
         await navigator.share({ files:[file], title:'Bản đồ Châu Âu' });
+        showToast(TOAST_MOBILE);
         return;
       }
     }catch(err){ /* cancelled or unsupported — fall back to a normal download */ }
   }
   triggerBrowserDownload(dataUrl, filename);
+  showToast(isMobileDevice() ? TOAST_MOBILE : TOAST_DESKTOP);
 }
 
 function submitSnapshot(){
