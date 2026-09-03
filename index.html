@@ -741,6 +741,75 @@ async function saveOrShare(dataUrl, filename, blob){
   showToast(isMobileDevice() ? TOAST_MOBILE : TOAST_DESKTOP);
 }
 
+// ---- PNG metadata: embed the list of currently-selected countries into
+// the saved image itself, as a standard PNG "Description" text chunk (an
+// iTXt chunk, so Vietnamese diacritics survive as proper UTF-8) — readable
+// in Preview/Explorer's file-info panel, exiftool, etc. ----
+const PNG_CRC_TABLE = (() => {
+  const table = new Uint32Array(256);
+  for(let n = 0; n < 256; n++){
+    let c = n;
+    for(let k = 0; k < 8; k++){ c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1); }
+    table[n] = c >>> 0;
+  }
+  return table;
+})();
+function pngCrc32(bytes){
+  let c = 0xFFFFFFFF;
+  for(let i = 0; i < bytes.length; i++){ c = PNG_CRC_TABLE[(c ^ bytes[i]) & 0xFF] ^ (c >>> 8); }
+  return (c ^ 0xFFFFFFFF) >>> 0;
+}
+// Inserts a UTF-8 iTXt chunk right after the PNG's IHDR chunk (the only
+// chunk guaranteed to come first), per the PNG spec's iTXt layout:
+// keyword\0 + compression-flag + compression-method + lang-tag\0 + translated-keyword\0 + utf8-text.
+function addPngTextChunk(bytes, keyword, text){
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const ihdrLength = view.getUint32(8, false);
+  const ihdrEnd = 8 + 8 + ihdrLength + 4; // signature(8) + len(4) + type(4) + data + crc(4)
+
+  const enc = new TextEncoder();
+  const parts = [
+    enc.encode(keyword),
+    Uint8Array.of(0),      // keyword null separator
+    Uint8Array.of(0),      // compression flag: 0 = uncompressed
+    Uint8Array.of(0),      // compression method: 0
+    Uint8Array.of(0),      // empty language tag + its null terminator
+    Uint8Array.of(0),      // empty translated keyword + its null terminator
+    enc.encode(text)       // UTF-8 text, runs to end of chunk data
+  ];
+  const dataLen = parts.reduce((s, p) => s + p.length, 0);
+  const chunk = new Uint8Array(4 + 4 + dataLen + 4);
+  const cview = new DataView(chunk.buffer);
+  cview.setUint32(0, dataLen, false);
+  chunk.set(enc.encode('iTXt'), 4);
+  let pos = 8;
+  parts.forEach(p => { chunk.set(p, pos); pos += p.length; });
+  cview.setUint32(8 + dataLen, pngCrc32(chunk.subarray(4, 8 + dataLen)), false);
+
+  const out = new Uint8Array(ihdrEnd + chunk.length + (bytes.length - ihdrEnd));
+  out.set(bytes.subarray(0, ihdrEnd), 0);
+  out.set(chunk, ihdrEnd);
+  out.set(bytes.subarray(ihdrEnd), ihdrEnd + chunk.length);
+  return out;
+}
+function bytesToDataUrl(bytes, mime){
+  let binary = '';
+  const chunkSize = 0x8000;
+  for(let i = 0; i < bytes.length; i += chunkSize){
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
+  }
+  return 'data:' + mime + ';base64,' + btoa(binary);
+}
+function selectedCountriesDescription(){
+  const names = DATA.countries
+    .filter(c => state.colored.has(c.id))
+    .sort((a, b) => a.number - b.number)
+    .map(c => c.name);
+  return names.length
+    ? `Bản đồ Châu Âu — ${names.length}/45 quốc gia đã chọn: ${names.join(', ')}`
+    : 'Bản đồ Châu Âu — chưa có quốc gia nào được chọn.';
+}
+
 function submitSnapshot(){
   const svg = document.getElementById('map');
   const clone = svg.cloneNode(true);
@@ -761,22 +830,34 @@ function submitSnapshot(){
     canvas.width = DATA.width; canvas.height = DATA.height;
     const ctx = canvas.getContext('2d');
     ctx.drawImage(img, 0, 0);
-    let dataUrl;
-    try{ dataUrl = canvas.toDataURL('image/png'); }
-    catch(e){ return; }
 
     const now = new Date();
     const time = now.toLocaleString('vi-VN', {hour:'2-digit',minute:'2-digit',day:'2-digit',month:'2-digit'});
     const stamp = now.toISOString().slice(0,19).replace(/[:T]/g,'-');
     const filename = 'ban-do-chau-au_' + state.colored.size + '-45_' + stamp + '.png';
+    const description = selectedCountriesDescription();
 
-    snapshots.unshift({ dataUrl, count: state.colored.size, time });
-    if(snapshots.length > 12) snapshots.length = 12;
-    persistSnapshots();
-    renderGallery();
+    canvas.toBlob(async function(blob){
+      if(!blob) return;
+      let finalDataUrl, finalBlob;
+      try{
+        const bytes = new Uint8Array(await blob.arrayBuffer());
+        const withMeta = addPngTextChunk(bytes, 'Description', description);
+        finalBlob = new Blob([withMeta], { type: 'image/png' });
+        finalDataUrl = bytesToDataUrl(withMeta, 'image/png');
+      }catch(err){
+        // Metadata embedding failed for some reason — still save a plain
+        // image rather than blocking Submit entirely.
+        finalBlob = blob;
+        try{ finalDataUrl = canvas.toDataURL('image/png'); }catch(e){ return; }
+      }
 
-    canvas.toBlob(function(blob){
-      if(blob) saveOrShare(dataUrl, filename, blob);
+      snapshots.unshift({ dataUrl: finalDataUrl, count: state.colored.size, time });
+      if(snapshots.length > 12) snapshots.length = 12;
+      persistSnapshots();
+      renderGallery();
+
+      saveOrShare(finalDataUrl, filename, finalBlob);
     }, 'image/png');
   };
   img.src = svg64;
