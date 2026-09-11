@@ -810,11 +810,57 @@ function selectedCountriesDescription(){
     : 'Bản đồ Châu Âu — chưa có quốc gia nào được chọn.';
 }
 
+// The exported SVG is serialized into a standalone data: URI and decoded
+// by the browser as its own isolated document (via an <img> load) — it has
+// no access to this page's <style> rules or CSS custom properties. Anything
+// styled only through a class (.pin circle, .pin text, .country's stroke,
+// the graticule lines) would fall back to plain SVG defaults there — an
+// unset fill defaults to solid black, which is exactly what turned every
+// number pin into a plain black dot. Bake the live, resolved CSS values in
+// as explicit presentation attributes on the clone before serializing, so
+// the exported image always matches what's on screen regardless of theme.
+function bakeMapStylesForExport(clone){
+  const pinCircleCss = getComputedStyle(document.querySelector('.pin circle'));
+  const pinTextCss = getComputedStyle(document.querySelector('.pin text'));
+  const countryCss = getComputedStyle(document.querySelector('.country'));
+  const countryOnEl = document.querySelector('.country.on');
+  const countryOnCss = countryOnEl ? getComputedStyle(countryOnEl) : null;
+  const graticuleEl = document.querySelector('#graticule line');
+  const graticuleCss = graticuleEl ? getComputedStyle(graticuleEl) : null;
+
+  if(graticuleCss){
+    clone.querySelectorAll('#graticule line').forEach(line => {
+      line.setAttribute('stroke', graticuleCss.stroke);
+      line.setAttribute('stroke-width', graticuleCss.strokeWidth);
+    });
+  }
+  clone.querySelectorAll('.country').forEach(path => {
+    const css = (path.classList.contains('on') && countryOnCss) ? countryOnCss : countryCss;
+    path.setAttribute('stroke', css.stroke);
+    path.setAttribute('stroke-width', css.strokeWidth);
+    path.setAttribute('stroke-linejoin', css.strokeLinejoin || 'round');
+  });
+  clone.querySelectorAll('.pin circle').forEach(circle => {
+    circle.setAttribute('fill', pinCircleCss.fill);
+    circle.setAttribute('stroke', pinCircleCss.stroke);
+    circle.setAttribute('stroke-width', pinCircleCss.strokeWidth);
+  });
+  clone.querySelectorAll('.pin text').forEach(text => {
+    text.setAttribute('font-family', pinTextCss.fontFamily);
+    text.setAttribute('font-size', pinTextCss.fontSize);
+    text.setAttribute('font-weight', pinTextCss.fontWeight);
+    text.setAttribute('fill', pinTextCss.fill);
+    text.setAttribute('text-anchor', 'middle');
+    text.setAttribute('dominant-baseline', 'central');
+  });
+}
+
 function submitSnapshot(){
   const svg = document.getElementById('map');
   const clone = svg.cloneNode(true);
   clone.setAttribute('width', DATA.width);
   clone.setAttribute('height', DATA.height);
+  bakeMapStylesForExport(clone);
   // inline a solid ocean background rect behind everything for the raster export
   const bgRect = document.createElementNS('http://www.w3.org/2000/svg','rect');
   bgRect.setAttribute('x','0'); bgRect.setAttribute('y','0');
