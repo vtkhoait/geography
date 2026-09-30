@@ -796,13 +796,16 @@ function bytesToDataUrl(bytes, mime){
   return 'data:' + mime + ';base64,' + btoa(binary);
 }
 function selectedCountriesDescription(){
+  // type: 1 = bản đồ châu Âu (tự do), 2 = cố định v1, 3 = cố định v2, 4 = cố định v3.
+  // countryList only holds countries the user picked — never the pre-colored/locked ones,
+  // which are listed separately in lockedCountries (empty here — this map has none) so a
+  // reader (e.g. the EU checker tool) never has to hardcode which countries each map
+  // version pre-colors.
   const names = DATA.countries
     .filter(c => state.colored.has(c.id))
     .sort((a, b) => a.number - b.number)
     .map(c => c.name);
-  return names.length
-    ? `Bản đồ Châu Âu — ${names.length}/45 quốc gia đã chọn: ${names.join(', ')}`
-    : 'Bản đồ Châu Âu — chưa có quốc gia nào được chọn.';
+  return JSON.stringify({ type: 1, countryList: names, lockedCountries: [] });
 }
 
 // The exported SVG is serialized into a standalone data: URI and decoded
