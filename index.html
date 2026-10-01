@@ -349,19 +349,6 @@
     color:var(--ink-soft);
   }
   .btn-ghost:hover{ border-color:var(--ink-soft); color:var(--ink); }
-  .format-select{
-    font-family:"IBM Plex Sans", sans-serif;
-    font-size:13px;
-    font-weight:600;
-    border-radius:8px;
-    border:1px solid var(--line);
-    background:transparent;
-    color:var(--ink-soft);
-    padding:0 10px;
-    cursor:pointer;
-  }
-  .format-select:hover{ border-color:var(--ink-soft); color:var(--ink); }
-
   .hint{
     font-size:12px;
     color:var(--ink-soft);
@@ -526,16 +513,11 @@
         </div>
         <div class="progress-track"><div class="progress-fill" id="progressFill"></div></div>
         <div class="btn-row">
-          <select class="format-select" id="exportFormat" title="Định dạng ảnh khi lưu">
-            <option value="png">PNG</option>
-            <option value="jpg">JPG</option>
-          </select>
-          <button class="btn-primary" id="submitBtn">Submit — Lưu ảnh</button>
-          <button class="btn-ghost" id="shareZipBtn" title="Nén ảnh thành .zip trước khi chia sẻ, để ứng dụng nhận không tự xóa mã minh chứng">Chia sẻ (.zip)</button>
+          <button class="btn-primary" id="shareZipBtn" title="Nén ảnh thành .zip trước khi chia sẻ, để ứng dụng nhận không tự xóa mã minh chứng">Chia sẻ (.zip)</button>
           <button class="btn-ghost" id="resetBtn" title="Bỏ màu tất cả">Đặt lại</button>
         </div>
-        <p class="hint">Submit sẽ chụp lại trạng thái bản đồ hiện tại, lưu vào nhật ký bên dưới, đồng thời lưu ảnh ra máy: trên điện thoại sẽ mở hộp thoại chia sẻ, trên máy tính ảnh sẽ tải xuống thư mục Downloads của trình duyệt (đổi thư mục tải xuống mặc định thành Desktop trong cài đặt trình duyệt nếu muốn ảnh vào thẳng đó — web không thể tự chọn đúng thư mục Desktop).</p>
-        <p class="hint hint-warn">⚠️ Trên điện thoại: trong hộp thoại chia sẻ, hãy chọn <strong>"Lưu vào thư viện ảnh" / "Save Image"</strong> — đừng gửi thẳng qua Zalo, Messenger, Email... Khi ảnh đi qua một ứng dụng khác, ứng dụng đó thường tự nén lại ảnh và xóa mất mã minh chứng (metadata) bên trong, khiến Trạm Kiểm Soát EU không đọc được. Lưu vào thư viện ảnh trước, rồi mới gửi ảnh đã lưu đi nơi khác nếu cần — hoặc bấm nút <strong>"Chia sẻ (.zip)"</strong> bên cạnh Submit: ảnh sẽ được nén lại trước, nên ứng dụng nhận không thể tự ý xóa mã minh chứng bên trong.</p>
+        <p class="hint"><strong>"Chia sẻ (.zip)"</strong> sẽ chụp lại trạng thái bản đồ hiện tại, lưu vào nhật ký bên dưới, nén ảnh thành file .zip rồi mở hộp thoại chia sẻ trên điện thoại (hoặc tải xuống thư mục Downloads trên máy tính).</p>
+        <p class="hint hint-warn">✓ Vì gửi dưới dạng .zip, ứng dụng nhận (Zalo, Messenger, Email...) không thể tự ý nén lại ảnh và xóa mã minh chứng bên trong — mã này vẫn còn nguyên để Trạm Kiểm Soát EU đọc được. Trạm Kiểm Soát EU cũng nhận trực tiếp file .zip, không cần giải nén thủ công.</p>
       </div>
 
       <div class="card">
@@ -708,13 +690,6 @@ function triggerBrowserDownload(dataUrl, filename){
   a.remove();
 }
 
-// Resolve once, in the background, rather than on every click — resolving
-// can take a few seconds (or up to 10s if this view never answers), and we
-// don't want Submit to feel stuck waiting on it.
-const downloadsCapPromise = (window.claude && window.claude.use)
-  ? window.claude.use('downloads').catch(() => null)
-  : Promise.resolve(null);
-
 let toastTimer = null;
 function showToast(message){
   const el = document.getElementById('toast');
@@ -723,44 +698,6 @@ function showToast(message){
   el.classList.add('show');
   if(toastTimer) clearTimeout(toastTimer);
   toastTimer = setTimeout(() => { el.classList.remove('show'); }, 3000);
-}
-const TOAST_MOBILE = 'Đã lưu ảnh — nếu vừa chọn "Lưu vào thư viện ảnh" thì mã minh chứng đã được giữ nguyên. Chia sẻ thẳng qua ứng dụng khác có thể làm mất mã này.';
-const TOAST_DESKTOP = 'Đã lưu ảnh thành công — kiểm tra trong thư mục Downloads trên máy tính của bạn.';
-
-// Preferred path: the platform's own save capability. Inside the Claude app
-// it hands the file to the right native surface itself — the browser's
-// download flow on a computer, the iOS share sheet (→ "Save Image" into
-// Photos) on a phone — with its own confirmation prompt.
-// Fallback path: used when that capability isn't available on this view
-// (for example, the page opened directly as its own browser tab rather than
-// inside the Claude app). There, a normal download always works; on a phone
-// we additionally try the Web Share API first so "Save Image" can still put
-// it straight into Photos.
-async function saveOrShare(dataUrl, filename, blob, mimeType){
-  mimeType = mimeType || 'image/png';
-  try{
-    const downloadsCap = await downloadsCapPromise;
-    if(downloadsCap){
-      await downloadsCap.save({ filename, data: blob });
-      showToast(isMobileDevice() ? TOAST_MOBILE : TOAST_DESKTOP);
-      return;
-    }
-  }catch(err){
-    if(err && err.code === 'declined') return; // respect an explicit "no" — no fallback behind their back
-    // any other error (unavailable, rate_limited, etc.) — fall through to the plain browser path below
-  }
-  if(isMobileDevice() && navigator.share){
-    try{
-      const file = new File([blob], filename, { type:mimeType });
-      if(navigator.canShare && navigator.canShare({ files:[file] })){
-        await navigator.share({ files:[file], title:'Bản đồ Châu Âu' });
-        showToast(TOAST_MOBILE);
-        return;
-      }
-    }catch(err){ /* cancelled or unsupported — fall back to a normal download */ }
-  }
-  triggerBrowserDownload(dataUrl, filename);
-  showToast(isMobileDevice() ? TOAST_MOBILE : TOAST_DESKTOP);
 }
 
 // ---- PNG metadata: embed the list of currently-selected countries into
@@ -1070,22 +1007,21 @@ function bakeMapStylesForExport(clone){
 
 const EXPORT_SCALE = 1.7; // saved images render 70% larger (in each dimension) than the map's base size, for a sharper export
 
-// JPG is the better default on phones: the save/share path on some mobile
-// platforms (notably Android) can end up writing the image as JPEG no
-// matter what format the page hands it, which silently drops a PNG's
-// metadata chunk since it isn't JPEG-compatible. Producing a genuine JPEG
-// ourselves — with the same JSON embedded via a JPEG comment segment —
-// means the format we embed metadata into always matches what actually
-// gets saved. Desktop keeps PNG, which has always worked reliably there.
-const exportFormatSelect = document.getElementById('exportFormat');
-if(exportFormatSelect) exportFormatSelect.value = isMobileDevice() ? 'jpg' : 'png';
+// No user-facing format picker: iOS/macOS always get PNG (Apple's own save
+// path handles PNG metadata reliably), everything else (Android, Windows,
+// Linux, ...) gets JPG, where a genuine JPEG with its metadata embedded via
+// a JPEG comment segment avoids the JPEG-conversion-drops-PNG-metadata
+// problem some of those platforms' save/share paths have.
+function isApplePlatform(){
+  return /iPhone|iPad|iPod|Macintosh/i.test(navigator.userAgent || '');
+}
 
 // Builds one rasterized, metadata-embedded snapshot of the current map and
 // hands it to `onReady` — shared by both the normal Submit flow and the
 // "share as .zip" flow below, which differ only in what they do with the
 // result (save/share the image directly vs. wrap it in a .zip first).
 function buildSnapshotPayload(onReady){
-  const exportFormat = (exportFormatSelect && exportFormatSelect.value === 'jpg') ? 'jpg' : 'png';
+  const exportFormat = isApplePlatform() ? 'png' : 'jpg';
   const exportMime = exportFormat === 'jpg' ? 'image/jpeg' : 'image/png';
   const svg = document.getElementById('map');
   const clone = svg.cloneNode(true);
@@ -1149,16 +1085,10 @@ function logSnapshot(payload){
   renderGallery();
 }
 
-function submitSnapshot(){
-  buildSnapshotPayload(function(payload){
-    logSnapshot(payload);
-    saveOrShare(payload.dataUrl, payload.filename, payload.blob, payload.mimeType);
-  });
-}
-
-// "Chia sẻ (.zip)": same snapshot, but delivered wrapped in a .zip so that
-// sharing it straight to a messaging/email app can't strip the embedded
-// JSON — see the ZIP helpers above for why.
+// "Chia sẻ (.zip)" is now the only save/share action: same snapshot as
+// before, delivered wrapped in a .zip so that sharing it straight to a
+// messaging/email app can't strip the embedded JSON — see the ZIP helpers
+// above for why.
 function shareSnapshotAsZip(){
   buildSnapshotPayload(function(payload){
     logSnapshot(payload);
@@ -1168,7 +1098,6 @@ function shareSnapshotAsZip(){
   });
 }
 
-document.getElementById('submitBtn').addEventListener('click', submitSnapshot);
 document.getElementById('shareZipBtn').addEventListener('click', shareSnapshotAsZip);
 document.getElementById('resetBtn').addEventListener('click', resetAll);
 
