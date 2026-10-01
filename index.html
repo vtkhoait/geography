@@ -924,28 +924,56 @@ function buildZipSingleFile(filename, bytes){
   return out;
 }
 const TOAST_ZIP = 'Đã nén ảnh thành .zip — gửi file này qua ứng dụng khác thì mã minh chứng sẽ được giữ nguyên vì ứng dụng nhận không thể tự ý nén lại ảnh bên trong.';
-async function shareZip(zipBytes, zipFilename){
-  const zipBlob = new Blob([zipBytes], { type: 'application/zip' });
-  if(isMobileDevice() && navigator.share){
+// Chrome on Android enforces a file-type safelist on navigator.share()'s
+// files — canShare() returns false for a .zip there even though the exact
+// same call shares it fine on iOS Safari (confirmed: iOS opens the share
+// sheet and shares the zip; Android silently fell through to a plain
+// download instead of opening the sheet). Base64-encoding the same zip
+// bytes into a plain-text .txt file works around that restriction —
+// text/plain is universally shareable, and base64 is pure ASCII so it
+// can't be corrupted by an app's text handling along the way. "Kiểm Tra
+// Thành Viên EU" recognizes the "EUROMAP-ZIP-B64:" prefix and decodes it
+// straight back into the original .zip, so the two paths are equivalent
+// end to end — only the wire format sent to the share sheet differs.
+async function trySharingFile(file, title){
+  if(!navigator.canShare || navigator.canShare({ files:[file] })){
     try{
-      const file = new File([zipBlob], zipFilename, { type: 'application/zip' });
-      if(navigator.canShare && navigator.canShare({ files:[file] })){
-        await navigator.share({ files:[file], title:'Bản đồ Châu Âu (nén)' });
-        showToast(TOAST_ZIP);
-        return;
-      }
-    }catch(err){ /* cancelled or unsupported — fall back to a normal download */ }
+      await navigator.share({ files:[file], title });
+      return true; // shared
+    }catch(err){
+      if(err && err.name === 'AbortError') return 'cancelled'; // user dismissed the sheet — don't try another path behind their back
+      // any other error (not actually supported despite canShare, etc.) — try the next fallback
+    }
+  }
+  return false; // not shareable this way
+}
+async function shareZip(zipBytes, zipFilename){
+  if(isMobileDevice() && navigator.share){
+    const zipFile = new File([zipBytes], zipFilename, { type: 'application/zip' });
+    const zipResult = await trySharingFile(zipFile, 'Bản đồ Châu Âu (nén)');
+    if(zipResult === true){ showToast(TOAST_ZIP); return; }
+    if(zipResult === 'cancelled') return;
+
+    const txtFilename = zipFilename.replace(/\.zip$/i, '') + '.txt';
+    const txtContent = 'EUROMAP-ZIP-B64:' + bytesToBase64(zipBytes);
+    const txtFile = new File([txtContent], txtFilename, { type: 'text/plain' });
+    const txtResult = await trySharingFile(txtFile, 'Bản đồ Châu Âu (nén)');
+    if(txtResult === true){ showToast(TOAST_ZIP); return; }
+    if(txtResult === 'cancelled') return;
   }
   triggerBrowserDownload(bytesToDataUrl(zipBytes, 'application/zip'), zipFilename);
   showToast(TOAST_ZIP);
 }
-function bytesToDataUrl(bytes, mime){
+function bytesToBase64(bytes){
   let binary = '';
   const chunkSize = 0x8000;
   for(let i = 0; i < bytes.length; i += chunkSize){
     binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
   }
-  return 'data:' + mime + ';base64,' + btoa(binary);
+  return btoa(binary);
+}
+function bytesToDataUrl(bytes, mime){
+  return 'data:' + mime + ';base64,' + bytesToBase64(bytes);
 }
 function selectedCountriesDescription(){
   // type: 1 = bản đồ châu Âu (tự do), 2 = cố định v1, 3 = cố định v2, 4 = cố định v3.
