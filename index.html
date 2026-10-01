@@ -348,6 +348,18 @@
     color:var(--ink-soft);
   }
   .btn-ghost:hover{ border-color:var(--ink-soft); color:var(--ink); }
+  .format-select{
+    font-family:"IBM Plex Sans", sans-serif;
+    font-size:13px;
+    font-weight:600;
+    border-radius:8px;
+    border:1px solid var(--line);
+    background:transparent;
+    color:var(--ink-soft);
+    padding:0 10px;
+    cursor:pointer;
+  }
+  .format-select:hover{ border-color:var(--ink-soft); color:var(--ink); }
 
   .hint{
     font-size:12px;
@@ -502,6 +514,10 @@
         </div>
         <div class="progress-track"><div class="progress-fill" id="progressFill"></div></div>
         <div class="btn-row">
+          <select class="format-select" id="exportFormat" title="Định dạng ảnh khi lưu">
+            <option value="png">PNG</option>
+            <option value="jpg">JPG</option>
+          </select>
           <button class="btn-primary" id="submitBtn">Submit — Lưu ảnh</button>
           <button class="btn-ghost" id="resetBtn" title="Bỏ màu tất cả">Đặt lại</button>
         </div>
@@ -710,7 +726,8 @@ const TOAST_DESKTOP = 'Đã lưu ảnh thành công — kiểm tra trong thư m�
 // inside the Claude app). There, a normal download always works; on a phone
 // we additionally try the Web Share API first so "Save Image" can still put
 // it straight into Photos.
-async function saveOrShare(dataUrl, filename, blob){
+async function saveOrShare(dataUrl, filename, blob, mimeType){
+  mimeType = mimeType || 'image/png';
   try{
     const downloadsCap = await downloadsCapPromise;
     if(downloadsCap){
@@ -724,7 +741,7 @@ async function saveOrShare(dataUrl, filename, blob){
   }
   if(isMobileDevice() && navigator.share){
     try{
-      const file = new File([blob], filename, { type:'image/png' });
+      const file = new File([blob], filename, { type:mimeType });
       if(navigator.canShare && navigator.canShare({ files:[file] })){
         await navigator.share({ files:[file], title:'Bản đồ Châu Âu' });
         showToast(TOAST_MOBILE);
@@ -785,6 +802,30 @@ function addPngTextChunk(bytes, keyword, text){
   out.set(bytes.subarray(0, ihdrEnd), 0);
   out.set(chunk, ihdrEnd);
   out.set(bytes.subarray(ihdrEnd), ihdrEnd + chunk.length);
+  return out;
+}
+// Inserts a JPEG "COM" (comment) marker segment right after the SOI marker
+// (0xFFD8, the first two bytes of every JPEG), carrying the exact same JSON
+// text as the PNG iTXt chunk above — this is what lets a saved JPG/JPEG be
+// read by the "Trạm Kiểm Soát EU" checker tool just like a PNG is.
+function addJpegComment(bytes, text){
+  const enc = new TextEncoder();
+  const textBytes = enc.encode(text);
+  const segLen = textBytes.length + 2; // JPEG segment length includes its own 2 length bytes
+  if(segLen > 0xFFFF){
+    // Comment too long for a single COM segment — astronomically unlikely
+    // for a 45-country list, but fail safe rather than write a corrupt file.
+    return bytes;
+  }
+  const seg = new Uint8Array(4 + textBytes.length);
+  seg[0] = 0xFF; seg[1] = 0xFE;
+  seg[2] = (segLen >> 8) & 0xFF; seg[3] = segLen & 0xFF;
+  seg.set(textBytes, 4);
+
+  const out = new Uint8Array(2 + seg.length + (bytes.length - 2));
+  out.set(bytes.subarray(0, 2), 0);      // SOI (0xFFD8)
+  out.set(seg, 2);                       // our COM segment
+  out.set(bytes.subarray(2), 2 + seg.length);
   return out;
 }
 function bytesToDataUrl(bytes, mime){
@@ -853,9 +894,21 @@ function bakeMapStylesForExport(clone){
   });
 }
 
-const EXPORT_SCALE = 1.7; // saved PNGs render 70% larger (in each dimension) than the map's base size, for a sharper export
+const EXPORT_SCALE = 1.7; // saved images render 70% larger (in each dimension) than the map's base size, for a sharper export
+
+// JPG is the better default on phones: the save/share path on some mobile
+// platforms (notably Android) can end up writing the image as JPEG no
+// matter what format the page hands it, which silently drops a PNG's
+// metadata chunk since it isn't JPEG-compatible. Producing a genuine JPEG
+// ourselves — with the same JSON embedded via a JPEG comment segment —
+// means the format we embed metadata into always matches what actually
+// gets saved. Desktop keeps PNG, which has always worked reliably there.
+const exportFormatSelect = document.getElementById('exportFormat');
+if(exportFormatSelect) exportFormatSelect.value = isMobileDevice() ? 'jpg' : 'png';
 
 function submitSnapshot(){
+  const exportFormat = (exportFormatSelect && exportFormatSelect.value === 'jpg') ? 'jpg' : 'png';
+  const exportMime = exportFormat === 'jpg' ? 'image/jpeg' : 'image/png';
   const svg = document.getElementById('map');
   const clone = svg.cloneNode(true);
   // Always export the whole map at full extent, regardless of the current
@@ -885,7 +938,7 @@ function submitSnapshot(){
     const now = new Date();
     const time = now.toLocaleString('vi-VN', {hour:'2-digit',minute:'2-digit',day:'2-digit',month:'2-digit'});
     const stamp = now.toISOString().slice(0,19).replace(/[:T]/g,'-');
-    const filename = 'ban-do-chau-au_' + state.colored.size + '-45_' + stamp + '.png';
+    const filename = 'ban-do-chau-au_' + state.colored.size + '-45_' + stamp + '.' + exportFormat;
     const description = selectedCountriesDescription();
 
     canvas.toBlob(async function(blob){
@@ -893,14 +946,16 @@ function submitSnapshot(){
       let finalDataUrl, finalBlob;
       try{
         const bytes = new Uint8Array(await blob.arrayBuffer());
-        const withMeta = addPngTextChunk(bytes, 'Description', description);
-        finalBlob = new Blob([withMeta], { type: 'image/png' });
-        finalDataUrl = bytesToDataUrl(withMeta, 'image/png');
+        const withMeta = exportFormat === 'jpg'
+          ? addJpegComment(bytes, description)
+          : addPngTextChunk(bytes, 'Description', description);
+        finalBlob = new Blob([withMeta], { type: exportMime });
+        finalDataUrl = bytesToDataUrl(withMeta, exportMime);
       }catch(err){
         // Metadata embedding failed for some reason — still save a plain
         // image rather than blocking Submit entirely.
         finalBlob = blob;
-        try{ finalDataUrl = canvas.toDataURL('image/png'); }catch(e){ return; }
+        try{ finalDataUrl = canvas.toDataURL(exportMime); }catch(e){ return; }
       }
 
       snapshots.unshift({ dataUrl: finalDataUrl, count: state.colored.size, time });
@@ -908,8 +963,8 @@ function submitSnapshot(){
       persistSnapshots();
       renderGallery();
 
-      saveOrShare(finalDataUrl, filename, finalBlob);
-    }, 'image/png');
+      saveOrShare(finalDataUrl, filename, finalBlob, exportMime);
+    }, exportMime, exportFormat === 'jpg' ? 0.95 : undefined);
   };
   img.src = svg64;
 }
