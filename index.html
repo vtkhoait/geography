@@ -317,6 +317,7 @@
 
   .btn-row{
     display:flex;
+    flex-wrap:wrap;
     gap:10px;
     margin-top:14px;
   }
@@ -530,10 +531,11 @@
             <option value="jpg">JPG</option>
           </select>
           <button class="btn-primary" id="submitBtn">Submit — Lưu ảnh</button>
+          <button class="btn-ghost" id="shareZipBtn" title="Nén ảnh thành .zip trước khi chia sẻ, để ứng dụng nhận không tự xóa mã minh chứng">Chia sẻ (.zip)</button>
           <button class="btn-ghost" id="resetBtn" title="Bỏ màu tất cả">Đặt lại</button>
         </div>
         <p class="hint">Submit sẽ chụp lại trạng thái bản đồ hiện tại, lưu vào nhật ký bên dưới, đồng thời lưu ảnh ra máy: trên điện thoại sẽ mở hộp thoại chia sẻ, trên máy tính ảnh sẽ tải xuống thư mục Downloads của trình duyệt (đổi thư mục tải xuống mặc định thành Desktop trong cài đặt trình duyệt nếu muốn ảnh vào thẳng đó — web không thể tự chọn đúng thư mục Desktop).</p>
-        <p class="hint hint-warn">⚠️ Trên điện thoại: trong hộp thoại chia sẻ, hãy chọn <strong>"Lưu vào thư viện ảnh" / "Save Image"</strong> — đừng gửi thẳng qua Zalo, Messenger, Email... Khi ảnh đi qua một ứng dụng khác, ứng dụng đó thường tự nén lại ảnh và xóa mất mã minh chứng (metadata) bên trong, khiến Trạm Kiểm Soát EU không đọc được. Lưu vào thư viện ảnh trước, rồi mới gửi ảnh đã lưu đi nơi khác nếu cần.</p>
+        <p class="hint hint-warn">⚠️ Trên điện thoại: trong hộp thoại chia sẻ, hãy chọn <strong>"Lưu vào thư viện ảnh" / "Save Image"</strong> — đừng gửi thẳng qua Zalo, Messenger, Email... Khi ảnh đi qua một ứng dụng khác, ứng dụng đó thường tự nén lại ảnh và xóa mất mã minh chứng (metadata) bên trong, khiến Trạm Kiểm Soát EU không đọc được. Lưu vào thư viện ảnh trước, rồi mới gửi ảnh đã lưu đi nơi khác nếu cần — hoặc bấm nút <strong>"Chia sẻ (.zip)"</strong> bên cạnh Submit: ảnh sẽ được nén lại trước, nên ứng dụng nhận không thể tự ý xóa mã minh chứng bên trong.</p>
       </div>
 
       <div class="card">
@@ -559,15 +561,11 @@ const SELECT_COLOR = '#c98cc9';
 
 const state = { colored: new Set() };
 
-function loadState(){
-  try{
-    const raw = localStorage.getItem('euromap_state_v1');
-    if(raw){ JSON.parse(raw).forEach(id => state.colored.add(id)); }
-  }catch(e){}
-}
-function saveState(){
-  try{ localStorage.setItem('euromap_state_v1', JSON.stringify(Array.from(state.colored))); }catch(e){}
-}
+// The map always starts fresh when opened — no previously-picked countries
+// carry over between visits, so these are intentionally no-ops rather than
+// reading/writing localStorage.
+function loadState(){}
+function saveState(){}
 
 function buildGraticule(){
   const g = document.getElementById('graticule');
@@ -915,6 +913,95 @@ function addPngExifChunk(bytes, text){
   out.set(bytes.subarray(ihdrEnd), ihdrEnd + chunk.length);
   return out;
 }
+// ---- Minimal ZIP writer (single file, stored/uncompressed) ----
+// Wrapping the exported image in a .zip before handing it to the share
+// sheet is the fix for metadata getting stripped when sharing straight to
+// a messaging/email app: those apps commonly recompress an image file they
+// recognize (which wipes the embedded JSON), but a .zip isn't an image, so
+// they just forward it as an opaque file attachment instead. "Stored"
+// (no compression) keeps this simple and guarantees the contained file's
+// bytes — including all its metadata — come back out byte-for-byte intact.
+function dosDateTime(date){
+  const time = ((date.getHours() & 0x1F) << 11) | ((date.getMinutes() & 0x3F) << 5) | ((Math.floor(date.getSeconds()/2)) & 0x1F);
+  const d = (((Math.max(date.getFullYear(), 1980) - 1980) & 0x7F) << 9) | (((date.getMonth()+1) & 0xF) << 5) | (date.getDate() & 0x1F);
+  return { time, date: d };
+}
+function buildZipSingleFile(filename, bytes){
+  const nameBytes = new TextEncoder().encode(filename);
+  const crc = pngCrc32(bytes);
+  const { time, date } = dosDateTime(new Date());
+
+  const localHeader = new Uint8Array(30 + nameBytes.length);
+  const lv = new DataView(localHeader.buffer);
+  lv.setUint32(0, 0x04034b50, true);
+  lv.setUint16(4, 20, true);
+  lv.setUint16(6, 0, true);
+  lv.setUint16(8, 0, true); // method: stored
+  lv.setUint16(10, time, true);
+  lv.setUint16(12, date, true);
+  lv.setUint32(14, crc, true);
+  lv.setUint32(18, bytes.length, true);
+  lv.setUint32(22, bytes.length, true);
+  lv.setUint16(26, nameBytes.length, true);
+  lv.setUint16(28, 0, true);
+  localHeader.set(nameBytes, 30);
+
+  const centralHeader = new Uint8Array(46 + nameBytes.length);
+  const cv = new DataView(centralHeader.buffer);
+  cv.setUint32(0, 0x02014b50, true);
+  cv.setUint16(4, 20, true);
+  cv.setUint16(6, 20, true);
+  cv.setUint16(8, 0, true);
+  cv.setUint16(10, 0, true);
+  cv.setUint16(12, time, true);
+  cv.setUint16(14, date, true);
+  cv.setUint32(16, crc, true);
+  cv.setUint32(20, bytes.length, true);
+  cv.setUint32(24, bytes.length, true);
+  cv.setUint16(28, nameBytes.length, true);
+  cv.setUint16(30, 0, true);
+  cv.setUint16(32, 0, true);
+  cv.setUint16(34, 0, true);
+  cv.setUint16(36, 0, true);
+  cv.setUint32(38, 0, true);
+  cv.setUint32(42, 0, true);
+  centralHeader.set(nameBytes, 46);
+
+  const eocd = new Uint8Array(22);
+  const ev = new DataView(eocd.buffer);
+  ev.setUint32(0, 0x06054b50, true);
+  ev.setUint16(4, 0, true);
+  ev.setUint16(6, 0, true);
+  ev.setUint16(8, 1, true);
+  ev.setUint16(10, 1, true);
+  ev.setUint32(12, centralHeader.length, true);
+  ev.setUint32(16, localHeader.length + bytes.length, true);
+  ev.setUint16(20, 0, true);
+
+  const out = new Uint8Array(localHeader.length + bytes.length + centralHeader.length + eocd.length);
+  let p = 0;
+  out.set(localHeader, p); p += localHeader.length;
+  out.set(bytes, p); p += bytes.length;
+  out.set(centralHeader, p); p += centralHeader.length;
+  out.set(eocd, p);
+  return out;
+}
+const TOAST_ZIP = 'Đã nén ảnh thành .zip — gửi file này qua ứng dụng khác thì mã minh chứng sẽ được giữ nguyên vì ứng dụng nhận không thể tự ý nén lại ảnh bên trong.';
+async function shareZip(zipBytes, zipFilename){
+  const zipBlob = new Blob([zipBytes], { type: 'application/zip' });
+  if(isMobileDevice() && navigator.share){
+    try{
+      const file = new File([zipBlob], zipFilename, { type: 'application/zip' });
+      if(navigator.canShare && navigator.canShare({ files:[file] })){
+        await navigator.share({ files:[file], title:'Bản đồ Châu Âu (nén)' });
+        showToast(TOAST_ZIP);
+        return;
+      }
+    }catch(err){ /* cancelled or unsupported — fall back to a normal download */ }
+  }
+  triggerBrowserDownload(bytesToDataUrl(zipBytes, 'application/zip'), zipFilename);
+  showToast(TOAST_ZIP);
+}
 function bytesToDataUrl(bytes, mime){
   let binary = '';
   const chunkSize = 0x8000;
@@ -993,7 +1080,11 @@ const EXPORT_SCALE = 1.7; // saved images render 70% larger (in each dimension) 
 const exportFormatSelect = document.getElementById('exportFormat');
 if(exportFormatSelect) exportFormatSelect.value = isMobileDevice() ? 'jpg' : 'png';
 
-function submitSnapshot(){
+// Builds one rasterized, metadata-embedded snapshot of the current map and
+// hands it to `onReady` — shared by both the normal Submit flow and the
+// "share as .zip" flow below, which differ only in what they do with the
+// result (save/share the image directly vs. wrap it in a .zip first).
+function buildSnapshotPayload(onReady){
   const exportFormat = (exportFormatSelect && exportFormatSelect.value === 'jpg') ? 'jpg' : 'png';
   const exportMime = exportFormat === 'jpg' ? 'image/jpeg' : 'image/png';
   const svg = document.getElementById('map');
@@ -1030,33 +1121,55 @@ function submitSnapshot(){
 
     canvas.toBlob(async function(blob){
       if(!blob) return;
-      let finalDataUrl, finalBlob;
+      const rawBytes = new Uint8Array(await blob.arrayBuffer());
+      let finalBytes, finalDataUrl;
       try{
-        const bytes = new Uint8Array(await blob.arrayBuffer());
-        const withMeta = exportFormat === 'jpg'
-          ? addJpegExif(addJpegComment(bytes, description), description)
-          : addPngExifChunk(addPngTextChunk(bytes, 'Description', description), description);
-        finalBlob = new Blob([withMeta], { type: exportMime });
-        finalDataUrl = bytesToDataUrl(withMeta, exportMime);
+        finalBytes = exportFormat === 'jpg'
+          ? addJpegExif(addJpegComment(rawBytes, description), description)
+          : addPngExifChunk(addPngTextChunk(rawBytes, 'Description', description), description);
+        finalDataUrl = bytesToDataUrl(finalBytes, exportMime);
       }catch(err){
         // Metadata embedding failed for some reason — still save a plain
         // image rather than blocking Submit entirely.
-        finalBlob = blob;
+        finalBytes = rawBytes;
         try{ finalDataUrl = canvas.toDataURL(exportMime); }catch(e){ return; }
       }
+      const finalBlob = new Blob([finalBytes], { type: exportMime });
 
-      snapshots.unshift({ dataUrl: finalDataUrl, count: state.colored.size, time });
-      if(snapshots.length > 12) snapshots.length = 12;
-      persistSnapshots();
-      renderGallery();
-
-      saveOrShare(finalDataUrl, filename, finalBlob, exportMime);
+      onReady({ bytes: finalBytes, blob: finalBlob, dataUrl: finalDataUrl, filename, mimeType: exportMime, count: state.colored.size, time });
     }, exportMime, exportFormat === 'jpg' ? 0.95 : undefined);
   };
   img.src = svg64;
 }
 
+function logSnapshot(payload){
+  snapshots.unshift({ dataUrl: payload.dataUrl, count: payload.count, time: payload.time });
+  if(snapshots.length > 12) snapshots.length = 12;
+  persistSnapshots();
+  renderGallery();
+}
+
+function submitSnapshot(){
+  buildSnapshotPayload(function(payload){
+    logSnapshot(payload);
+    saveOrShare(payload.dataUrl, payload.filename, payload.blob, payload.mimeType);
+  });
+}
+
+// "Chia sẻ (.zip)": same snapshot, but delivered wrapped in a .zip so that
+// sharing it straight to a messaging/email app can't strip the embedded
+// JSON — see the ZIP helpers above for why.
+function shareSnapshotAsZip(){
+  buildSnapshotPayload(function(payload){
+    logSnapshot(payload);
+    const zipFilename = payload.filename.replace(/\.(png|jpe?g)$/i, '.zip');
+    const zipBytes = buildZipSingleFile(payload.filename, payload.bytes);
+    shareZip(zipBytes, zipFilename);
+  });
+}
+
 document.getElementById('submitBtn').addEventListener('click', submitSnapshot);
+document.getElementById('shareZipBtn').addEventListener('click', shareSnapshotAsZip);
 document.getElementById('resetBtn').addEventListener('click', resetAll);
 
 // ---- Zoom & pan ----
