@@ -828,6 +828,81 @@ function addJpegComment(bytes, text){
   out.set(bytes.subarray(2), 2 + seg.length);
   return out;
 }
+// ---- EXIF "ImageDescription" embedding (PNG eXIf chunk / JPEG APP1 Exif
+// segment) carrying the same JSON text as the PNG iTXt chunk / JPEG COM
+// segment above. This exists because the PNG/JPEG-specific channels above
+// can get stripped when an image is saved through a phone's native "Save to
+// Photos" flow (iOS Photos / Android Gallery import re-processes images and
+// only reliably keeps metadata in the standard EXIF structure they
+// recognize) — EXIF is the one channel that's meant to survive that trip,
+// so the checker tool reads whichever of the two actually made it through.
+function buildExifBlock(text){
+  const enc = new TextEncoder();
+  const strBytes = enc.encode(text);
+  const strWithNull = new Uint8Array(strBytes.length + 1); // EXIF ASCII values are NUL-terminated
+  strWithNull.set(strBytes, 0);
+  strWithNull[strBytes.length] = 0;
+
+  const IFD0_OFFSET = 8; // right after the 8-byte TIFF header
+  const IFD0_SIZE = 2 + 12 + 4; // entry-count(2) + one 12-byte entry + next-IFD-offset(4)
+  const DATA_OFFSET = IFD0_OFFSET + IFD0_SIZE;
+
+  const buf = new ArrayBuffer(DATA_OFFSET + strWithNull.length);
+  const view = new DataView(buf);
+  const bytes = new Uint8Array(buf);
+
+  bytes[0] = 0x49; bytes[1] = 0x49; // "II" — little-endian TIFF byte order
+  view.setUint16(2, 42, true);
+  view.setUint32(4, IFD0_OFFSET, true);
+
+  let p = IFD0_OFFSET;
+  view.setUint16(p, 1, true); p += 2; // one IFD0 entry
+  view.setUint16(p, 0x010E, true); p += 2; // tag: ImageDescription
+  view.setUint16(p, 2, true); p += 2;      // type: ASCII
+  view.setUint32(p, strWithNull.length, true); p += 4; // count, incl. trailing NUL
+  view.setUint32(p, DATA_OFFSET, true); p += 4;        // doesn't fit inline -> offset
+  view.setUint32(p, 0, true); p += 4;                  // next IFD offset: none
+
+  bytes.set(strWithNull, DATA_OFFSET);
+  return bytes;
+}
+function addJpegExif(bytes, text){
+  const exifBlock = buildExifBlock(text);
+  const sig = new TextEncoder().encode('Exif\0\0');
+  const payloadLen = sig.length + exifBlock.length;
+  const segLen = payloadLen + 2; // segment length field includes itself
+  if(segLen > 0xFFFF) return bytes; // fail safe — astronomically unlikely to be hit
+  const seg = new Uint8Array(4 + payloadLen);
+  seg[0] = 0xFF; seg[1] = 0xE1; // APP1
+  seg[2] = (segLen >> 8) & 0xFF; seg[3] = segLen & 0xFF;
+  seg.set(sig, 4);
+  seg.set(exifBlock, 4 + sig.length);
+
+  const out = new Uint8Array(2 + seg.length + (bytes.length - 2));
+  out.set(bytes.subarray(0, 2), 0); // SOI
+  out.set(seg, 2);
+  out.set(bytes.subarray(2), 2 + seg.length);
+  return out;
+}
+function addPngExifChunk(bytes, text){
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const ihdrLength = view.getUint32(8, false);
+  const ihdrEnd = 8 + 8 + ihdrLength + 4;
+
+  const exifData = buildExifBlock(text);
+  const chunk = new Uint8Array(4 + 4 + exifData.length + 4);
+  const cview = new DataView(chunk.buffer);
+  cview.setUint32(0, exifData.length, false);
+  chunk.set(new TextEncoder().encode('eXIf'), 4);
+  chunk.set(exifData, 8);
+  cview.setUint32(8 + exifData.length, pngCrc32(chunk.subarray(4, 8 + exifData.length)), false);
+
+  const out = new Uint8Array(ihdrEnd + chunk.length + (bytes.length - ihdrEnd));
+  out.set(bytes.subarray(0, ihdrEnd), 0);
+  out.set(chunk, ihdrEnd);
+  out.set(bytes.subarray(ihdrEnd), ihdrEnd + chunk.length);
+  return out;
+}
 function bytesToDataUrl(bytes, mime){
   let binary = '';
   const chunkSize = 0x8000;
@@ -947,8 +1022,8 @@ function submitSnapshot(){
       try{
         const bytes = new Uint8Array(await blob.arrayBuffer());
         const withMeta = exportFormat === 'jpg'
-          ? addJpegComment(bytes, description)
-          : addPngTextChunk(bytes, 'Description', description);
+          ? addJpegExif(addJpegComment(bytes, description), description)
+          : addPngExifChunk(addPngTextChunk(bytes, 'Description', description), description);
         finalBlob = new Blob([withMeta], { type: exportMime });
         finalDataUrl = bytesToDataUrl(withMeta, exportMime);
       }catch(err){
