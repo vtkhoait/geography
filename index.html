@@ -368,6 +368,17 @@
     line-height:1.5;
   }
 
+  .hint-warn{
+    font-size:12px;
+    color:var(--ink);
+    margin-top:8px;
+    line-height:1.5;
+    padding:8px 10px;
+    border-left:3px solid var(--accent);
+    background:var(--paper-raised);
+    border-radius:4px;
+  }
+
   .gallery{
     display:grid;
     grid-template-columns:1fr 1fr;
@@ -521,7 +532,8 @@
           <button class="btn-primary" id="submitBtn">Submit — Lưu ảnh</button>
           <button class="btn-ghost" id="resetBtn" title="Bỏ màu tất cả">Đặt lại</button>
         </div>
-        <p class="hint">Submit sẽ chụp lại trạng thái bản đồ hiện tại, lưu vào nhật ký bên dưới, đồng thời lưu ảnh ra máy: trên điện thoại sẽ mở hộp thoại chia sẻ để lưu vào Thư viện ảnh, trên máy tính ảnh sẽ tải xuống thư mục Downloads của trình duyệt (đổi thư mục tải xuống mặc định thành Desktop trong cài đặt trình duyệt nếu muốn ảnh vào thẳng đó — web không thể tự chọn đúng thư mục Desktop).</p>
+        <p class="hint">Submit sẽ chụp lại trạng thái bản đồ hiện tại, lưu vào nhật ký bên dưới, đồng thời lưu ảnh ra máy: trên điện thoại sẽ mở hộp thoại chia sẻ, trên máy tính ảnh sẽ tải xuống thư mục Downloads của trình duyệt (đổi thư mục tải xuống mặc định thành Desktop trong cài đặt trình duyệt nếu muốn ảnh vào thẳng đó — web không thể tự chọn đúng thư mục Desktop).</p>
+        <p class="hint hint-warn">⚠️ Trên điện thoại: trong hộp thoại chia sẻ, hãy chọn <strong>"Lưu vào thư viện ảnh" / "Save Image"</strong> — đừng gửi thẳng qua Zalo, Messenger, Email... Khi ảnh đi qua một ứng dụng khác, ứng dụng đó thường tự nén lại ảnh và xóa mất mã minh chứng (metadata) bên trong, khiến Trạm Kiểm Soát EU không đọc được. Lưu vào thư viện ảnh trước, rồi mới gửi ảnh đã lưu đi nơi khác nếu cần.</p>
       </div>
 
       <div class="card">
@@ -714,7 +726,7 @@ function showToast(message){
   if(toastTimer) clearTimeout(toastTimer);
   toastTimer = setTimeout(() => { el.classList.remove('show'); }, 3000);
 }
-const TOAST_MOBILE = 'Đã lưu ảnh thành công — kiểm tra trong Thư viện ảnh (Photo Gallery) trên điện thoại của bạn.';
+const TOAST_MOBILE = 'Đã lưu ảnh — nếu vừa chọn "Lưu vào thư viện ảnh" thì mã minh chứng đã được giữ nguyên. Chia sẻ thẳng qua ứng dụng khác có thể làm mất mã này.';
 const TOAST_DESKTOP = 'Đã lưu ảnh thành công — kiểm tra trong thư mục Downloads trên máy tính của bạn.';
 
 // Preferred path: the platform's own save capability. Inside the Claude app
