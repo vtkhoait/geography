@@ -513,11 +513,13 @@
         </div>
         <div class="progress-track"><div class="progress-fill" id="progressFill"></div></div>
         <div class="btn-row">
-          <button class="btn-primary" id="shareZipBtn" title="Nén ảnh thành .zip trước khi chia sẻ, để ứng dụng nhận không tự xóa mã minh chứng">Chia sẻ (.zip)</button>
+          <button class="btn-primary" id="saveImageBtn" title="Lưu ảnh có mã minh chứng trực tiếp vào thư viện ảnh của máy">Lưu ảnh (thư viện)</button>
+          <button class="btn-primary" id="shareZipBtn" title="Chia sẻ qua ứng dụng khác (Zalo, Messenger, Email...) mà không bị mất mã minh chứng">Chia sẻ</button>
           <button class="btn-ghost" id="resetBtn" title="Bỏ màu tất cả">Đặt lại</button>
         </div>
-        <p class="hint"><strong>"Chia sẻ (.zip)"</strong> sẽ chụp lại trạng thái bản đồ hiện tại, lưu vào nhật ký bên dưới, nén ảnh thành file .zip rồi mở hộp thoại chia sẻ trên điện thoại (hoặc tải xuống thư mục Downloads trên máy tính).</p>
-        <p class="hint hint-warn">✓ Vì gửi dưới dạng .zip, ứng dụng nhận (Zalo, Messenger, Email...) không thể tự ý nén lại ảnh và xóa mã minh chứng bên trong — mã này vẫn còn nguyên để Trạm Kiểm Soát EU đọc được. Trạm Kiểm Soát EU cũng nhận trực tiếp file .zip, không cần giải nén thủ công.</p>
+        <p class="hint"><strong>"Lưu ảnh (thư viện)"</strong> chụp trạng thái bản đồ hiện tại và mở hộp thoại lưu — hãy chọn "Lưu vào thư viện ảnh" / "Save Image" để ảnh (kèm mã minh chứng) được lưu thẳng vào thư viện ảnh của máy, không qua ứng dụng nào khác nên không bị nén lại.</p>
+        <p class="hint"><strong>"Chia sẻ"</strong> dùng khi muốn gửi ảnh cho người khác qua Zalo, Messenger, Email... — ảnh được gói lại để ứng dụng nhận không tự ý nén và xóa mất mã minh chứng bên trong.</p>
+        <p class="hint hint-warn">✓ Mã minh chứng (JSON) được nhúng thẳng trong ảnh ở cả hai cách — Công cụ Kiểm Tra Thành Viên EU đọc được từ ảnh gốc, file .zip, hoặc file .txt chia sẻ ra.</p>
       </div>
 
       <div class="card">
@@ -923,18 +925,21 @@ function buildZipSingleFile(filename, bytes){
   out.set(eocd, p);
   return out;
 }
-const TOAST_ZIP = 'Đã nén ảnh thành .zip — gửi file này qua ứng dụng khác thì mã minh chứng sẽ được giữ nguyên vì ứng dụng nhận không thể tự ý nén lại ảnh bên trong.';
-// Chrome on Android enforces a file-type safelist on navigator.share()'s
-// files — canShare() returns false for a .zip there even though the exact
-// same call shares it fine on iOS Safari (confirmed: iOS opens the share
-// sheet and shares the zip; Android silently fell through to a plain
-// download instead of opening the sheet). Base64-encoding the same zip
-// bytes into a plain-text .txt file works around that restriction —
-// text/plain is universally shareable, and base64 is pure ASCII so it
-// can't be corrupted by an app's text handling along the way. "Kiểm Tra
-// Thành Viên EU" recognizes the "EUROMAP-ZIP-B64:" prefix and decodes it
-// straight back into the original .zip, so the two paths are equivalent
-// end to end — only the wire format sent to the share sheet differs.
+const TOAST_ZIP = 'Đã chia sẻ dưới dạng .txt (chứa dữ liệu nén) — mã minh chứng được giữ nguyên vì ứng dụng nhận không thể tự ý nén lại ảnh bên trong.';
+const TOAST_ZIP_DL = 'Đã tải file xuống thiết bị — mã minh chứng vẫn được giữ nguyên trong file.';
+const TOAST_SAVE_IMG = 'Hãy chọn "Lưu vào thư viện ảnh" / "Save Image" trong màn hình vừa mở để ảnh (kèm mã minh chứng) được lưu thẳng vào thư viện ảnh.';
+const TOAST_SAVE_IMG_DL = 'Đã tải ảnh xuống thiết bị — mã minh chứng vẫn được giữ trong ảnh.';
+// Some Android/Chrome combinations reject navigator.share()'s files check
+// (canShare() returns false) for a .zip, and in at least one confirmed
+// case rejected a plain .txt the same way too — even from a standalone,
+// non-embedded page — while the identical call shares fine on iOS Safari.
+// Since which files a given browser will accept can't be reliably probed
+// ahead of time, "Chia sẻ (.zip)" now always shares the base64-encoded
+// .txt wrapper directly (skipping a doomed zip-first attempt) and only
+// falls back to a plain download when sharing itself isn't available or
+// is rejected outright. "Kiểm Tra Thành Viên EU" recognizes the
+// "EUROMAP-ZIP-B64:" prefix and decodes it straight back into the
+// original .zip either way.
 async function trySharingFile(file, title){
   if(!navigator.canShare || navigator.canShare({ files:[file] })){
     try{
@@ -942,18 +947,13 @@ async function trySharingFile(file, title){
       return true; // shared
     }catch(err){
       if(err && err.name === 'AbortError') return 'cancelled'; // user dismissed the sheet — don't try another path behind their back
-      // any other error (not actually supported despite canShare, etc.) — try the next fallback
+      // any other error (not actually supported despite canShare, etc.) — fall through to download
     }
   }
   return false; // not shareable this way
 }
 async function shareZip(zipBytes, zipFilename){
   if(isMobileDevice() && navigator.share){
-    const zipFile = new File([zipBytes], zipFilename, { type: 'application/zip' });
-    const zipResult = await trySharingFile(zipFile, 'Bản đồ Châu Âu (nén)');
-    if(zipResult === true){ showToast(TOAST_ZIP); return; }
-    if(zipResult === 'cancelled') return;
-
     const txtFilename = zipFilename.replace(/\.zip$/i, '') + '.txt';
     const txtContent = 'EUROMAP-ZIP-B64:' + bytesToBase64(zipBytes);
     const txtFile = new File([txtContent], txtFilename, { type: 'text/plain' });
@@ -962,7 +962,23 @@ async function shareZip(zipBytes, zipFilename){
     if(txtResult === 'cancelled') return;
   }
   triggerBrowserDownload(bytesToDataUrl(zipBytes, 'application/zip'), zipFilename);
-  showToast(TOAST_ZIP);
+  showToast(TOAST_ZIP_DL);
+}
+// "Lưu ảnh (thư viện)" shares the plain image (never zipped) so the
+// native share sheet's own "Save image" / "Lưu vào thư viện ảnh" target
+// can write it straight into the Photos/Gallery app — that save path
+// never recompresses, so the embedded JSON metadata survives intact.
+// Falls back to a normal browser download (metadata-preserving either
+// way) when sharing isn't available or is rejected.
+async function shareImageDirect(imgBytes, imgFilename, imgMime){
+  if(isMobileDevice() && navigator.share){
+    const imgFile = new File([imgBytes], imgFilename, { type: imgMime });
+    const result = await trySharingFile(imgFile, 'Bản đồ Châu Âu');
+    if(result === true){ showToast(TOAST_SAVE_IMG); return; }
+    if(result === 'cancelled') return;
+  }
+  triggerBrowserDownload(bytesToDataUrl(imgBytes, imgMime), imgFilename);
+  showToast(TOAST_SAVE_IMG_DL);
 }
 function bytesToBase64(bytes){
   let binary = '';
@@ -1113,10 +1129,20 @@ function logSnapshot(payload){
   renderGallery();
 }
 
-// "Chia sẻ (.zip)" is now the only save/share action: same snapshot as
-// before, delivered wrapped in a .zip so that sharing it straight to a
-// messaging/email app can't strip the embedded JSON — see the ZIP helpers
-// above for why.
+// "Lưu ảnh (thư viện)" saves the raw image (with embedded JSON) straight
+// to the device's photo library via the share sheet's own save-image
+// target — see shareImageDirect above.
+function saveImageToGallery(){
+  buildSnapshotPayload(function(payload){
+    logSnapshot(payload);
+    shareImageDirect(payload.bytes, payload.filename, payload.mimeType);
+  });
+}
+
+// "Chia sẻ (.zip)" is for sending to someone else through another app:
+// same snapshot as above, delivered wrapped (as a base64 .txt — see the
+// ZIP helpers above for why) so sharing it straight to a messaging/email
+// app can't strip the embedded JSON.
 function shareSnapshotAsZip(){
   buildSnapshotPayload(function(payload){
     logSnapshot(payload);
@@ -1126,6 +1152,7 @@ function shareSnapshotAsZip(){
   });
 }
 
+document.getElementById('saveImageBtn').addEventListener('click', saveImageToGallery);
 document.getElementById('shareZipBtn').addEventListener('click', shareSnapshotAsZip);
 document.getElementById('resetBtn').addEventListener('click', resetAll);
 
