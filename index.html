@@ -1096,7 +1096,7 @@ function buildSnapshotPayload(onReady){
     const now = new Date();
     const time = now.toLocaleString('vi-VN', {hour:'2-digit',minute:'2-digit',day:'2-digit',month:'2-digit'});
     const stamp = now.toISOString().slice(0,19).replace(/[:T]/g,'-');
-    const filename = 'ban-do-chau-au_' + state.colored.size + '-45_' + stamp + '.' + exportFormat;
+    const filename = 'ban-do-chau-au-v0_' + state.colored.size + '-45_' + stamp + '.' + exportFormat;
     const description = selectedCountriesDescription();
 
     canvas.toBlob(async function(blob){
